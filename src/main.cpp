@@ -170,6 +170,11 @@ static Button2 Button(Button_Pin);
 
 static void Button_Single(Button2 Butt)
 {
+#ifdef WITH_EPAPER
+  if(EPD_IsRadarView())
+  { EPD_TrafficRange_Next();
+    return; }
+#endif
 #ifdef WITH_OLED
   if(OLED_PageOFF)
     OLED_PageOFF=0;
@@ -178,9 +183,6 @@ static void Button_Single(Button2 Butt)
   #ifdef WITH_OLED_DIM
     OLED_PageActive=millis();
   #endif
-#endif
-#ifdef WITH_EPAPER
-  /// control the zoom factor ?
 #endif
 }
 
