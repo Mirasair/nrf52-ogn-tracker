@@ -271,10 +271,11 @@ void OLED_DrawRF(u8g2_t *OLED, const GPS_Position *GPS) // RF 868MHz
   u8g2_DrawStr(OLED, 0, 24, Line);
   sprintf(Line, "Rx: %+4.1fdBm", Radio_BkgRSSI);
   u8g2_DrawStr(OLED, 0, 36, Line);
-  uint32_t Sum=0;
-  for(int Idx=0; Idx<8; Idx++)
-    Sum+=Radio_RxCount[Idx];
-  sprintf(Line, "Rx: %d pkts", Sum);
+  // uint32_t Sum=0;
+  // for(int Idx=0; Idx<8; Idx++)
+  //   Sum+=Radio_RxCount[Idx];
+  // sprintf(Line, "Rx: %d pkts", Sum);
+  sprintf(Line, "Rx: %3.1f pkt/s", Radio_PktRate);
   u8g2_DrawStr(OLED, 0, 48, Line);
   Len=0;
   Len+=Format_String(Line+Len, Radio_FreqPlan.getPlanName());               // name of the frequency plan

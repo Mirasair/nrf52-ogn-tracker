@@ -1,6 +1,6 @@
 #pragma once
 
-#if defined(WITH_THINKNODE_M5) || defined(WITH_EPAPER)
+#if defined(WITH_THINKNODE_M5) || defined(WITH_EPAPER) || defined(WITH_WIO_TRACKER)
 extern uint8_t AlarmThresh;
 #endif
 

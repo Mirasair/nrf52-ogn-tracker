@@ -46,6 +46,8 @@ static GDL90_REPORT    GDL_REPORT;
 
 #if defined(WITH_THINKNODE_M5) || defined(WITH_EPAPER)
 uint8_t AlarmThresh = 4;              // 0: all alarms, 1: only 1 or higher, 2: only 2 or higher, 3: only three or higher, 4: all blocked
+#elif defined(WITH_WIO_TRACKER)
+uint8_t AlarmThresh = 0;
 #else
 const uint8_t AlarmThresh = 0;
 #endif
@@ -1294,12 +1296,12 @@ void vTaskPROC(void* pvParameters)
 #ifdef WITH_BEEPER                                                         // make the sound according to the level
 #ifdef WITH_WIO_TRACKER
         // Measured resonant region of the fitted Wio buzzer: 2.45-2.65kHz.
-        const uint8_t NearTone = Play_Oct_2 | 3; // 2489Hz
-        const uint8_t Warn1Tone = NearTone;
-        const uint8_t Warn2Tone = NearTone;
+        const uint8_t NearTone  = Play_Oct_1 | 2;
+        const uint8_t Warn1Tone = Play_Oct_2 | 2;
+        const uint8_t Warn2Tone = Play_Oct_2 | 3;
         const uint8_t Warn3Tone = Play_Oct_2 | 4; // 2637Hz
 #else
-        const uint8_t NearTone = Play_Oct_1 | 0;
+        const uint8_t NearTone  = Play_Oct_1 | 0;
         const uint8_t Warn1Tone = Play_Oct_1 | 4;
         const uint8_t Warn2Tone = Play_Oct_1 | 8;
         const uint8_t Warn3Tone = Play_Oct_1 | 11;

@@ -211,20 +211,18 @@ static void Button_Long(Button2 Butt)
 
 #if defined(WITH_WIO_TRACKER) && defined(WITH_BEEPER)
 static void BuzzerSwitch_Long(Button2 Butt)
-{ bool Enable = !Play_isEnabled();
-  if(!Enable)
+{ if(AlarmThresh==0)
   { // Descending confirmation before muting.
-    Beep(2637); delay(100);
-    Beep(2489); delay(150);
-    Beep(0);
-  }
-  Play_SetEnabled(Enable);
-  if(Enable)
+    Play(Play_Vol_1 | Play_Oct_1 | 4, 100);
+    Play(Play_Vol_0 | Play_Oct_1 | 4,  50);
+    Play(Play_Vol_1 | Play_Oct_1 | 3, 150);
+    AlarmThresh=4; }
+  else
   { // Ascending confirmation after enabling.
-    Play(Play_Vol_1 | Play_Oct_2 | 3, 100);
-    Play(Play_Vol_0 | Play_Oct_2 | 3, 50);
-    Play(Play_Vol_1 | Play_Oct_2 | 4, 150);
-  }
+    Play(Play_Vol_1 | Play_Oct_1 | 3, 100);
+    Play(Play_Vol_0 | Play_Oct_1 | 3,  50);
+    Play(Play_Vol_1 | Play_Oct_1 | 4, 150);
+    AlarmThresh=0; }
 }
 #endif
 
@@ -488,8 +486,10 @@ void setup()
 #else
 #ifdef WITH_WIO_TRACKER
   // The Wio Tracker L1 buzzer is markedly louder around 2.5-2.65kHz.
-  Play(Play_Vol_1 | Play_Oct_2 | 0x03, 250); // 2489Hz
-  Play(Play_Vol_1 | Play_Oct_2 | 0x04, 250); // 2637Hz
+  // Play(Play_Vol_1 | Play_Oct_2 | 0x03, 250); // 2489Hz
+  // Play(Play_Vol_1 | Play_Oct_2 | 0x04, 250); // 2637Hz
+  Play(Play_Vol_1 | Play_Oct_0 | 0x05, 250);
+  Play(Play_Vol_1 | Play_Oct_0 | 0x08, 250);
 #else
   Play(Play_Vol_1 | Play_Oct_0 | 0x05, 250);
   Play(Play_Vol_1 | Play_Oct_0 | 0x08, 250);
