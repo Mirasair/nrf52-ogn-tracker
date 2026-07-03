@@ -7,7 +7,9 @@
 #include "hal.h"                      // Hardware Abstraction Layer
 
 #include "proc.h"                     // PROC task: decode/correct received packets
-// #include "log.h"                      // LOG task: packet logging
+#ifdef WITH_LOG
+#include "log.h"                      // LOG task: packet logging
+#endif
 
 #include "ogn.h"                      // OGN packet structures, encoding/decoding/etc.
 #include "flarm.h"                    // CRC, error correction and $PXFLM NMEA
@@ -15,6 +17,10 @@
 #include "gps.h"                      // GPS task: get own time and position, set the GPS baudrate and navigation mode
 
 #include "fifo.h"
+
+#ifdef WITH_EPAPER
+#include "epd.h"
+#endif
 
 #ifdef WITH_SDLOG
 #include "sdlog.h"
@@ -61,6 +67,7 @@ void Sound_TrafficWarn(const LookOut_Target *Tgt)
   uint16_t HorDist = Tgt->HorDist;       // [0.5]
   uint16_t Bearing = Tgt->getBearing();  //
   int16_t RelBearing = Look.getRelBearing(Tgt);
+#ifdef CONS_OUTPUT
   if(CONS_UART_isConnected() && xSemaphoreTake(CONS_Mutex, 25))
   { Format_String(CONS_UART_Write, "Traffic: ");
     CONS_UART_Write('#');
@@ -79,6 +86,7 @@ void Sound_TrafficWarn(const LookOut_Target *Tgt)
     Format_UnsDec(CONS_UART_Write, (uint16_t)(TimeMargin/2));
     Format_String(CONS_UART_Write, "s\n");
     xSemaphoreGive(CONS_Mutex); }
+#endif
   // SoundMsg("Traffic");
 }
 #endif
@@ -290,8 +298,11 @@ static bool getTelemStatus(ADSL_Packet &Packet, const GPS_Position *GPS)
   Packet.setRelay(0);
   Packet.Telemetry.Header.TelemType=0x0;                            // 0 => device status
   if(GPS) GPS->EncodeTelemetry(Packet);
+#ifdef WITH_NRF52
+  if(Packet.Telemetry.Baro.Temperature==(-128)) Packet.Telemetry.Baro.Temperature = (readMCUtemperature()+2)/5;
+#endif
 #ifdef WITH_SX1276
-  if(Packet.Telemetry.Baro.Temperature==(-128)) Packet.Telemetry.Baro.Temperature=Radio_ChipTemperature*2;
+  if(Packet.Telemetry.Baro.Temperature==(-128)) Packet.Telemetry.Baro.Temperature = Radio_ChipTemperature*2;
 #endif
   uint8_t SNR = (GPS_SatSNR+2)/4;                                   // encode number of satellites and SNR in the Status packet
   if(SNR>10) { SNR-=10; if(SNR>31) SNR=31; }
@@ -427,9 +438,11 @@ static void ReadStatus(OGN_Packet &Packet)
     Len+=NMEA_AppendCheckCRNL(Line, Len);                                    // append NMEA check-sum and CR+NL
     // LogLine(Line);
     // if(CONS_UART_Free()>=128)
+#ifdef CONS_OUTPUT
     if(CONS_UART_isConnected() && xSemaphoreTake(CONS_Mutex, 25))
     { if(CONS_UART_Free()>Len) Format_String(CONS_UART_Write, Line, 0, Len);                          // send the NMEA out to the console
       xSemaphoreGive(CONS_Mutex); }
+#endif
     SysLog_Line(Line, Len, 0, 25, 1);
   }
 }
@@ -620,10 +633,11 @@ static void ProcessRxOGN(OGN_RxPacket<OGN_Packet> *RxPacket, uint8_t RxPacketIdx
       else
 #endif
       { Len=RxPacket->WritePFLAA(Line, Warn, LatDist, LonDist, RxPacket->Packet.DecodeAltitude()-GPS_Altitude/10); }
-      if(Len>0)
-      if(CONS_UART_isConnected() && xSemaphoreTake(CONS_Mutex, 25))
+#ifdef CONS_OUTPUT
+      if(Len>0 && CONS_UART_isConnected() && xSemaphoreTake(CONS_Mutex, 25))
       { if(CONS_UART_Free()>Len) Format_String(CONS_UART_Write, Line, 0, Len);
         xSemaphoreGive(CONS_Mutex); }
+#endif
       if(Len>0) SysLog_Line(Line, Len, 0, 25, 1);
     }
 #endif // WITH_PFLAA
@@ -749,9 +763,11 @@ static void ProcessRxADSL(ADSL_RxPacket *RxPacket, uint8_t RxPacketIdx, uint32_t
       else
 #endif
       { Len=RxPacket->Packet.WritePFLAA(Line, Warn, LatDist, LonDist, RxPacket->Packet.getAlt()-(GPS_Altitude+GPS_GeoidSepar)/10); }
+#ifdef CONS_OUTPUT
       if(Len>0 && CONS_UART_isConnected() && xSemaphoreTake(CONS_Mutex, 25))
       { if(CONS_UART_Free()>Len) Format_String(CONS_UART_Write, Line, 0, Len);
         xSemaphoreGive(CONS_Mutex); }
+#endif
       if(Len>0) SysLog_Line(Line, Len, 0, 25, 1);
     }
 #endif // WITH_PFLAA
@@ -1100,9 +1116,9 @@ void vTaskPROC(void* pvParameters)
 #endif
     if(Position)
     { Position->EncodeStatus(StatPacket.Packet);             // encode GPS altitude and pressure/temperature/humidity
-// #ifdef WITH_NRF52
-//       if(!StatPacket.Packet.hasTemperature()) StatPacket.Packet.EncodeTemperature((int16_t)((nrf_temp_read()*10+2)/4));
-// #endif
+#ifdef WITH_NRF52
+      if(!StatPacket.Packet.hasTemperature()) StatPacket.Packet.EncodeTemperature(readMCUtemperature());
+#endif
 #ifdef WITH_SX1276
       if(!StatPacket.Packet.hasTemperature()) StatPacket.Packet.EncodeTemperature((int16_t)Radio_ChipTemperature*10);
 #endif
@@ -1242,18 +1258,22 @@ void vTaskPROC(void* pvParameters)
       // process own position, get the most dangerous target
       const LookOut_Target *Tgt=Look.ProcessOwn(PosPacket.Packet, PosTime, Position->GeoidSeparation/10);
 #ifdef WITH_PFLAA
+#ifdef CONS_OUTPUT
       if(Parameters.Verbose & 0b01)
       { if(CONS_UART_isConnected() && xSemaphoreTake(CONS_Mutex, 25))
-        { if(CONS_UART_Free()>80) Look.WritePFLA(CONS_UART_Write);                                // produce PFLAU and PFLAA for all tracked targets
+        { if(CONS_UART_Free()>80) Look.WritePFLA(CONS_UART_Write);        // produce PFLAU and PFLAA for all tracked targets
           xSemaphoreGive(CONS_Mutex); }
         Look.WritePFLA(SysLog_Line, 0, 25, 1);                            // write all PFLA'a to the console/sys-log
       }
+#endif
 #else // WITH_PFLAA
       if(Parameters.Verbose & 0b01)
       { uint8_t Len=Look.WritePFLAU(Line);                                // $PFLAU, overall status
+#ifdef CONS_OUTPUT
         if(CONS_UART_isConnected() && xSemaphoreTake(CONS_Mutex, 25))
         { if(CONS_UART_Free()>Len) Format_String(CONS_UART_Write, Line, 0, Len);
           xSemaphoreGive(CONS_Mutex); }
+#endif
         SysLog_Line(Line, Len, 0, 25, 1);
       }
 #endif // WITH_PFLAA
@@ -1263,6 +1283,9 @@ void vTaskPROC(void* pvParameters)
       if( (Warn>0) /* && (AverSpeed>=10) */ )                                    // if non-zero warning level and we seem to be moving
       { // int16_t RelBearing = Look.getRelBearing(Tgt);                      // relative bearing to the Target
         // int8_t Bearing = (12*(int32_t)RelBearing+0x8000)>>16;              // [-12..+12]
+#ifdef WITH_EPAPER
+        EPD_BacklightOn(30000);
+#endif
 #ifdef WITH_FLASHER
         if(Warn>0) Flasher_Play(Flasher_PattDouble);
         if(Warn>1) Flasher_Play(Flasher_PattDouble);
@@ -1305,9 +1328,11 @@ void vTaskPROC(void* pvParameters)
 #ifdef WITH_PFLAA
       if(Parameters.Verbose & 0b01)
       { uint8_t Len=Look.WritePFLAU(Line);                                // $PFLAU, overall status
+#ifdef CONS_OUTPUT
         if(CONS_UART_isConnected() && xSemaphoreTake(CONS_Mutex, 25))
         { if(CONS_UART_Free()>Len) Format_String(CONS_UART_Write, Line, 0, Len);
           xSemaphoreGive(CONS_Mutex); }
+#endif
         SysLog_Line(Line, Len, 0, 25, 1);
       }
 #endif // WITH_PFLAA

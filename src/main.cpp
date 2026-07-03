@@ -4,13 +4,14 @@
 #include "proc.h"
 #include "ogn-radio.h"
 
+#include "external_flash_fs.h"
+#ifdef WITH_LOG
+#include "log.h"
+#endif
 #include "epd.h"
 #include "oled.h"
 
 #include <Wire.h>
-
-#include <Adafruit_LittleFS.h>
-#include <InternalFileSystem.h>
 
 #include "Button2.h"
 
@@ -67,8 +68,16 @@ static uint8_t I2C_Scan(TwoWire &Wire, const char *Title)
 
 // =======================================================================================================
 
+int16_t readMCUtemperature(void)
+{ NRF_TEMP->TASKS_START = 1;
+  while(!NRF_TEMP->EVENTS_DATARDY);
+  int32_t Temp = NRF_TEMP->TEMP;
+  NRF_TEMP->EVENTS_DATARDY = 0;
+  NRF_TEMP->TASKS_STOP = 1;
+  return Temp=(Temp*10+2)/4; }             // [0.1degC]
+
 static int ADC_Init(void)
-{ // analogReadResolution(12);             // default is 10 bits
+{ // analogReadResolution(12);             // default is 10 bits, no need to change
   analogReference(AR_INTERNAL_3_0); }      // so 1024 ADC counts is 3.0V
 
 uint16_t BatterySense(int Samples)
@@ -161,6 +170,11 @@ static Button2 Button(Button_Pin);
 
 static void Button_Single(Button2 Butt)
 {
+#ifdef WITH_EPAPER
+  if(EPD_IsRadarView())
+  { EPD_TrafficRange_Next();
+    return; }
+#endif
 #ifdef WITH_OLED
   if(OLED_PageOFF)
     OLED_PageOFF=0;
@@ -172,12 +186,25 @@ static void Button_Single(Button2 Butt)
 #endif
 }
 
-static void Button_Double(Button2 Butt) { }
-static void Button_Long(Button2 Butt) { }
+static void Button_Double(Button2 Butt)
+{
+#ifdef WITH_EPAPER
+  EPD_BacklightOn(15000);
+#endif
+}
+
+static void Button_Long(Button2 Butt)
+{ PowerMode=0;
+  /// specific stuff to do before shutdown
+  delay(4000);
+  NRF_POWER->SYSTEMOFF = 1;
+  __DSB();
+  __WFI();   // never returns
+}
 
 static void Button_Init(void)
 { pinMode(Button_Pin, INPUT);
-  Button.setLongClickTime(2000);
+  Button.setLongClickTime(3000);
   Button.setClickHandler(Button_Single);
   Button.setDoubleClickHandler(Button_Double);
   Button.setLongClickDetectedHandler(Button_Long); }
@@ -344,9 +371,12 @@ void SysLog_Line(const char *Line, int LineLen, bool Timestamp, int msTimeout, b
 { (void)Timestamp;
   if(!CONS_UART_isConnected()) return;
   if (LogOnly || Line==0 || LineLen <= 0) return;
+#ifdef CONS_OUTPUT
   if(!xSemaphoreTake(CONS_Mutex, msTimeout)) return;
   if(CONS_UART_Free()>LineLen) Serial.write((const uint8_t *)Line, LineLen);
-  xSemaphoreGive(CONS_Mutex); }
+  xSemaphoreGive(CONS_Mutex);
+#endif
+}
 
 void SysLog_Line(const char *Line, bool Timestamp, int msTimeout, bool LogOnly)
 { if (Line==0) return;
@@ -392,12 +422,13 @@ void setup()
 
   Button_Init();
   InternalFS.begin();
+  Parameters.setDefault(getUniqueAddress()); // set default parameter values
+  if(Parameters.ReadFromNVS()<0)             // try to get parameters from NVS
+  { Parameters.WriteToNVS(); }
 
   CONS_Mutex = xSemaphoreCreateMutex();
   I2C_Mutex = xSemaphoreCreateMutex();
   // WIFI_Mutex = xSemaphoreCreateMutex();
-
-  Parameters.setDefault(getUniqueAddress()); // set default parameter values
 
   Wire.setPins(I2C_PinSDA, I2C_PinSCL);
   Wire.begin();
@@ -412,11 +443,25 @@ void setup()
   OLED.sendBuffer();
 #endif
 
-
   Serial.begin(115200);
   Serial.println();
   // delay(1000);
   digitalWrite(LED_PinRed, LED_StateOff);
+
+#ifdef WITH_BEEPER
+  Beep_Init();
+#ifdef WITH_BEEPER_GEN
+  Play_Morse('S');
+#else
+  Play(Play_Vol_1 | Play_Oct_0 | 0x05, 250);
+  Play(Play_Vol_1 | Play_Oct_0 | 0x08, 250);
+  Play(Play_Vol_0 | Play_Oct_0 | 0x00, 100);
+#endif
+  // Play_Morse(' ');
+  // Play_Morse('O');
+  // Play_Morse('G');
+  // Play_Morse('N');
+#endif
 
   Serial.print("nrf52-ogn-tracker ");
   Serial.print(HARD_NAME);
@@ -430,6 +475,10 @@ void setup()
   // Serial.print("FreeRTOS tick [Hz] = ");
   // Serial.println(configTICK_RATE_HZ);
 
+  HardwareStatus.SPIFFS = LogFS_begin();
+  LogFS_printStatus(Serial);
+  LogFS_listRoot(Serial);
+
   // size_t FStotal = InternalFS.totalBytes();
   // size_t FSused  = InternalFS.usedBytes();
   // Serial.printf("InternalFS: Total:%d Used:%d [kB]\n", (int)(FStotal>>10), (int)(FSused>10));
@@ -438,6 +487,9 @@ void setup()
   xTaskCreate(vTaskGPS    ,  "GPS"  ,  1000, NULL, 1, NULL);  // read data from GPS
   xTaskCreate(Radio_Task  ,  "RF"   ,  1200, NULL, 1, NULL);  // transmit/receive packets
   xTaskCreate(vTaskPROC   ,  "PROC" ,  1200, NULL, 0, NULL);  // process received packets, prepare packets for transmission
+#ifdef WITH_LOG
+  xTaskCreate(vTaskLOG    ,  "LOG"  ,  3000, NULL, 0, NULL);  // write received and own packets to external flash
+#endif
 #ifdef WITH_EPAPER
   xTaskCreate(EPD_Task    ,  "EPD"  ,  3000, NULL, 0, NULL);  // update e-paper display
 #endif
@@ -481,7 +533,7 @@ static void ReadParameters(void)  // read parameters requested by the user in th
     if(NMEA.Parms==0) { PrintPOGNS(); return; }                              // if no parameter given
     Parameters.ReadPOGNS(NMEA);
     PrintParameters();
-    // esp_err_t Err = Parameters.WriteToNVS();                                                  // erase and write the parameters into >
+    Parameters.WriteToNVS();                                                  // erase and write the parameters into >
   }
 }
 #endif
@@ -505,8 +557,18 @@ static void ReadPFLAC(void)  // read parameters requested by the user in the NME
     // if(NMEA.Parms==0) { PrintPOGNS(); return; }                              // if no parameter given
     Parameters.ReadPFLAC(NMEA);
     PrintParameters();
-    // esp_err_t Err = Parameters.WriteToNVS();                                                  // erase and write the parameters into >
+    Parameters.WriteToNVS();                                                  // erase and write the parameters into >
   }
+}
+#endif
+
+#ifdef WITH_LOG
+static void ListLogFile(void)
+{
+  if(NMEA.Parms!=1) return;
+  uint32_t FileTime = FlashLog_ReadShortFileTime((const char *)NMEA.ParmPtr(0), NMEA.ParmLen(0));
+  if(FileTime==0) return;
+  FlashLog_ListFile(FileTime);
 }
 #endif
 
@@ -520,6 +582,9 @@ static void ProcessNMEA(void)     // process a valid NMEA that we got to the con
 #ifdef WITH_CONFIG
   if(NMEA.isPOGNS()) ReadParameters();
   if(NMEA.isPFLA()) ReadPFLA();
+#endif
+#ifdef WITH_LOG
+  if(NMEA.isPOGNL()) ListLogFile();
 #endif
 }
 
@@ -542,11 +607,20 @@ static void ProcessCtrlC(void)                                  // print system 
   CONS_UART_Write('\r'); CONS_UART_Write('\n');
   Parameters.Write(CONS_UART_Write);                         // write the parameters to the console
 
-  Format_String(CONS_UART_Write, "Batt:");
-  Format_UnsDec(CONS_UART_Write, (10*BatteryVoltage+128)>>8, 5, 4);
-  Format_String(CONS_UART_Write, "V ");
-  Format_SignDec(CONS_UART_Write, (600*BatteryVoltageRate+128)>>8, 3, 1);
-  Format_String(CONS_UART_Write, "mV/min\n");
+  Serial.printf("Batt:%6.4fV %+4.1fmV/min\n", 0.0001f*((10*BatteryVoltage+128)>>8), 0.1f*((600*BatteryVoltageRate+128)>>8));
+  // Format_String(CONS_UART_Write, "Batt:");
+  // Format_UnsDec(CONS_UART_Write, (10*BatteryVoltage+128)>>8, 5, 4);
+  // Format_String(CONS_UART_Write, "V ");
+  // Format_SignDec(CONS_UART_Write, (600*BatteryVoltageRate+128)>>8, 3, 1);
+  // Format_String(CONS_UART_Write, "mV/min\n");
+
+  // lfs_t *lfs = InternalFS._getFS();
+  // Serial.printf("InternalFS TotalBlocks:%lu x %lu B\n", lfs->cfg->block_count, lfs->cfg->block_size);
+
+  // uint32_t TotalBytes = lfs->cfg->block_count * lfs->cfg->block_size;
+  // uint32_t UsedBytes = lfs_fs_size(lfs) * lfs->cfg->block_size;
+  // Serial.printf("InternalFS Total:%3.1f Used:%3.1f [MB]\n", (1.0f/0x1000000)*TotalBytes, (1.0f/0x1000000)*UsedBytes);
+  LogFS_printStatus(Serial);
 
   xSemaphoreGive(CONS_Mutex); }
 
@@ -561,6 +635,34 @@ static void ProcessCtrlX(void)
     // ESP.restart();
     NVIC_SystemReset(); }
   LastTime=Time; } 
+
+static void ProcessCtrlL(void)
+{
+#ifdef WITH_LOG
+  int Files = FlashLog_ListFiles();
+  if(Files<=0) Serial.println("FlashLog: no log files");
+#else
+  Serial.println("FlashLog: not enabled");
+#endif
+}
+
+static void ProcessCtrlO(void)
+{ static uint32_t LastTime=0;
+  uint32_t Time=millis();
+  uint32_t Diff=Time-LastTime;
+  if(Diff<1000)
+  {
+#ifdef WITH_LOG
+    if(FlashLog_isOpen())
+    { Serial.println("ExternalFlash: log file is open, format skipped");
+      LastTime=Time;
+      return; }
+#endif
+    HardwareStatus.SPIFFS = LogFS_format(Serial);
+    LogFS_listRoot(Serial); }
+  else
+  { Serial.println("ExternalFlash: press Ctrl-O again within 1s to format FAT"); }
+  LastTime=Time; }
 
 static int ProcessInput(void)
 {
@@ -578,6 +680,9 @@ static int ProcessInput(void)
   { uint8_t Byte; int Err=CONS_UART_Read(Byte); if(Err<=0) break; // get byte from console, if none: exit the loop
     Count++;
     if(Byte==CtrlC) ProcessCtrlC();                                // if Ctrl-C: print parameters
+    if(Byte==CtrlF) LogFS_listRoot(Serial);                         // if Ctrl-F: list external flash root
+    if(Byte==CtrlL) ProcessCtrlL();                                  // if Ctrl-L: list log files
+    if(Byte==CtrlO) ProcessCtrlO();                                  // double Ctrl-O formats external flash FAT
 #ifdef WITH_LOOKOUT
     if(Byte==CtrlT) ListTraffic();                                 // if Ctrl-T: print traffic
 #endif
@@ -591,6 +696,9 @@ static int ProcessInput(void)
 
 void loop()
 { vTaskDelay(1);
+#ifdef WITH_BEEPER
+  Play_TimerCheck(1);              // handle playing notes on the buzzer
+#endif
   Button.loop();
   while(ProcessInput()>0);         // handle console input
   static GPS_Position *PrevGPS=0;

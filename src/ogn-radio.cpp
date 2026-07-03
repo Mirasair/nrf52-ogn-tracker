@@ -489,7 +489,7 @@ static int Radio_TxFSK(const uint8_t *Packet, uint8_t Len)
     usLeft = usTxTime-usTime;                                          // [usec] time left till the end of packet
     if(Radio_IRQ()) break;                                 // raised IRQ => end-of-data
     // uint16_t Flags=Radio.getIRQFlags(); if(Flags & RADIOLIB_SX127X_CLEAR_IRQ_FLAG_TX_DONE) break;
-    if(usLeft>1500) { delay(1); continue; }
+    if(usLeft>1500) { vTaskDelay(1); continue; }
     if(usLeft<(-40)) break;
     taskYIELD(); }
   // State=Radio.finishTransmit();                         // adds a long delay and leaves a significant tail
@@ -1211,10 +1211,11 @@ void Radio_Task(void *Parms)
   TimeSync &TimeRef = GPS_TimeSync;
 
   int Len=sprintf(Line, "RF chip %s%s detected", Radio_ChipType, HardwareStatus.Radio?"":" NOT");
+#ifdef CONS_OUTPUT
   if(xSemaphoreTake(CONS_Mutex, 20))
   { Serial.println(Line);
     xSemaphoreGive(CONS_Mutex); }
-
+#endif
   for( ; ; )
   { if(!HardwareStatus.Radio) { delay(1000); continue; }
     if(PowerMode==0) { Radio.standby(); Radio.sleep(); Radio_Cache_Clear(); delay(5000); continue; }
@@ -1318,6 +1319,7 @@ void Radio_Task(void *Parms)
     { if(msTimeLeft>0) vTaskDelay(msTimeLeft); }
 #endif // WITH_FANET_SLOT
 
+    /// debug print
     // if(xSemaphoreTake(CONS_Mutex, 20))
     // { Serial.printf("Radio: %10d:%8d %4dms\n", TimeRef.UTC, TimeRef.sysTime, msTime);
     //   xSemaphoreGive(CONS_Mutex); }
@@ -1545,9 +1547,11 @@ void Radio_Task(void *Parms)
              // OGN_TxFIFO.isCorrupt()?'!':'_', ADSL_TxFIFO.isCorrupt()?'!':'_',
              // FSK_RxFIFO.isCorrupt()?'!':'_', PAW_TxFIFO.isCorrupt()?'!':'_');
     PktCountSum=0; Radio_msLiveTime=0; Radio_msDeadTime=0;
+#ifdef CONS_OUTPUT
     if((Parameters.Verbose&0b01) && CONS_UART_isConnected() && xSemaphoreTake(CONS_Mutex, 30))
     { if(CONS_UART_Free()>LineLen) Serial.println(Line);
       xSemaphoreGive(CONS_Mutex); }
+#endif
     Line[LineLen++]='\n'; Line[LineLen]=0;
     SysLog_Line(Line, LineLen, 0, 25, 1);
   }
