@@ -1099,7 +1099,7 @@ void vTaskGPS(void* pvParameters)
   // PPS_TickCount=0;
   Burst_Tick=0;
 
-  vTaskDelay(pdMS_TO_TICKS(5));                                          // put some initial delay for lighter startup load
+  vTaskDelay(5);                                          // put some initial delay for lighter startup load
 
 #ifdef CONS_OUTPUT
   if(CONS_UART_isConnected() && xSemaphoreTake(CONS_Mutex, 25))
@@ -1179,7 +1179,7 @@ void vTaskGPS(void* pvParameters)
       xSemaphoreGive(CONS_Mutex); }
 #endif
 */
-    if(LineIdle>2) vTaskDelay(pdMS_TO_TICKS(1));
+    if(LineIdle>2) vTaskDelay(1);
     if(LineIdle==0)                                                        // if any bytes were received ?
     { if(!GPS_Burst.Active) GPS_BurstStart();                              // if not already started then declare burst started
       if( (!GPS_Burst.Complete) && (GPS_Burst.GxGGA && GPS_Burst.GxRMC && GPS_Burst.GxGSA) ) // if GGA+RMC+GSA received
@@ -1209,7 +1209,7 @@ void vTaskGPS(void* pvParameters)
 #ifdef WITH_GPS_MTK
 #ifdef WITH_GPS_ENABLE
         GPS_DISABLE();
-        vTaskDelay(pdMS_TO_TICKS(10));
+        vTaskDelay(10);
         GPS_ENABLE();
 #endif
         GPS_UART_Write('\n');

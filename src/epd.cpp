@@ -661,7 +661,7 @@ void EPD_Task(void *Parms)
   EPD_DrawID();
 
   for( ; ; )
-  { vTaskDelay(pdMS_TO_TICKS(100));
+  { vTaskDelay(100);
     EPD_BacklightCheck();
     EPD_UpdateID();                  // this can take seconds (occasionally)
     EPD_BacklightCheck();
